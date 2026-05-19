@@ -98,31 +98,31 @@ def results_explainability(model_package, x_append_row, iso_score, original_row,
     xgb_model = model_package['xgb_model']
     explainer = model_package['shap_explainer']
     
-    # SHAP values for this single instance
+    #SHAP values for this single instance
     shap_vals_list = explainer.shap_values(x_append_row.reshape(1, -1))
-    # For binary classification, shap_vals_list is [class0, class1]; we want class1 (malicious)
+    #for binary classification, shap_vals_list is [class0, class1]; i need class1 (malicious)
     if isinstance(shap_vals_list, list) and len(shap_vals_list) == 2:
         shap_values = shap_vals_list[1][0]       # first (only) row of positive class
     else:
         shap_values = shap_vals_list[0]          # fallback
     
-    # Probability and prediction
+    #probability and prediction
     prob = xgb_model.predict_proba(x_append_row.reshape(1, -1))[0, 1]
     pred = "Malicious" if prob >= threshold else "Normal"
     confidence = prob if pred == "Malicious" else 1 - prob
     
-    # Feature contributions
+    #feature contributions
     feature_contrib = pd.DataFrame({
         'feature': feature_names,
         'shap_value': shap_values
     }).sort_values('shap_value', ascending=False)
     
-    # Top features pushing toward malicious (positive SHAP)
+    #top features pushing toward malicious (positive SHAP)
     top_malicious = feature_contrib[feature_contrib['shap_value'] > 0].head(5)
-    # Top features pushing toward normal (negative SHAP)
+    #top features pushing toward normal (negative SHAP)
     top_normal = feature_contrib[feature_contrib['shap_value'] < 0].head(5).sort_values('shap_value')
     
-    # Get original values for those features (human-readable)
+    #get original values for those features (human-readable)
     readable_explanation = []
     for _, row in top_malicious.iterrows():
         feat = row['feature']
@@ -149,33 +149,33 @@ def main():
 
     st.markdown(f"""
     <div class="hero-container">
-        <h1 class="hero-title">🔍 ThreatFind</h1>
+        <h1 class="hero-title">ThreatFind</h1>
         <p class="hero-subtitle">
-            Snuff out any potential insider threats before they can cause harm 🚨
+            Snuff out any potential insider threats before they can cause harm 
         </p>
     </div>
     """, unsafe_allow_html=True)
     
     # Sidebar
-    st.sidebar.markdown(f"### 🚀 Navigation")
+    st.sidebar.markdown(f"### Navigation")
     page = st.sidebar.selectbox(
         "Choose a page:",
-        ["🔍 Organisational Search via CSV", 
-         "🎯 Single Search", 
-         "📊 Exploratory Data Analysis"]
+        ["Organisational Search via CSV", 
+         "Single Search", 
+         "Exploratory Data Analysis"]
     )
     st.divider()
 
-    if page == "🔍 Organisational Search via CSV":
-        st.markdown('<h2 class="centered-header">🏢 Organisational Analysis</h2>', unsafe_allow_html=True)
+    if page == "Organisational Search via CSV":
+        st.markdown('<h2 class="centered-header">Organisational Analysis</h2>', unsafe_allow_html=True)
         
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.info("👆 **Upload your CSV file** containing employee data, logs, or threat indicators")
+            st.info("**Upload your CSV file** containing employee data, logs, or threat indicators")
         with col2:
             st.metric("Files Analyzed", "0", help="Number of CSV files processed")
 
-        file_upload = st.file_uploader("📁 Select Your CSV File", type="csv")
+        file_upload = st.file_uploader("Select Your CSV File", type="csv")
         
         if file_upload is not None:
             try:
@@ -185,51 +185,51 @@ def main():
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric("📊 Total Records", len(df))
+                    st.metric("Total Records", len(df))
                 with col2:
                     if 'employee_campus' in df.columns:
                         st.metric("Unique Campuses", df["employee_campus"].nunique())
                 
-                if st.button("🚀 Run Threat Detection", type="primary"):
+                if st.button("Run Threat Detection", type="primary"):
                     with st.spinner("Analyzing all records..."):
                         model = load_model()
                         try:
-                            # Prepare features and get predictions
+                            #prepare features and get predictions
                             processed_df, x_append, iso_scores = prepare_features(df, model)
                             xgb_model = model['xgb_model']
                             threshold = model['best_threshold']
                             probs = xgb_model.predict_proba(x_append)[:, 1]
                             preds = (probs >= threshold).astype(int)
                             
-                            # Build results dataframe
+                            #create results dataframe
                             results_df = df.copy()
                             results_df["Prediction"] = ["Malicious" if p == 1 else "Normal" for p in preds]
                             results_df["Risk_Prob"] = probs
                             results_df["Anomaly_Score"] = iso_scores
                             results_df["Confidence"] = np.where(preds == 1, probs, 1 - probs).astype(float)
                             
-                            # ========== OVERALL STATISTICS ==========
-                            st.subheader("📊 Organisational Threat Summary")
+                            #statics of orgnaization
+                            st.subheader("Organisational Threat Summary")
                             
                             col1, col2, col3, col4 = st.columns(4)
                             total = len(results_df)
                             mal_count = (results_df["Prediction"] == "Malicious").sum()
                             norm_count = total - mal_count
                             col1.metric("Total Employees", total)
-                            col2.metric("⚠️ Malicious", mal_count, delta=f"{mal_count/total:.1%}" if total>0 else "0")
-                            col3.metric("✅ Normal", norm_count, delta=f"{norm_count/total:.1%}" if total>0 else "0")
+                            col2.metric("Malicious", mal_count, delta=f"{mal_count/total:.1%}" if total>0 else "0")
+                            col3.metric("Normal", norm_count, delta=f"{norm_count/total:.1%}" if total>0 else "0")
                             col4.metric("Avg. Confidence", f"{results_df['Confidence'].mean():.2%}")
                             
-                            # ========== GRAPHS ==========
+                            #graphing implementation
                             fig, axes = plt.subplots(1, 2, figsize=(12, 4))
                             
-                            # Bar chart of predictions
+                            #bar chart of predictions
                             pred_counts = results_df["Prediction"].value_counts()
                             axes[0].bar(pred_counts.index, pred_counts.values, color=['#d9534f', '#5bc0de'])
                             axes[0].set_title("Threat Prediction Count")
                             axes[0].set_ylabel("Number of employees")
                             
-                            # Histogram of risk probabilities
+                            #histogram of risk probabilities
                             axes[1].hist(results_df["Risk_Prob"], bins=30, color='darkorange', edgecolor='black')
                             axes[1].axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.2f}')
                             axes[1].set_title("Risk Probability Distribution")
@@ -239,18 +239,17 @@ def main():
                             
                             plt.tight_layout()
                             st.pyplot(fig)
-                            plt.close(fig)# After loading model and before using feature_names
+                            plt.close(fig)#after loading model and before using feature_names
                             
                             feature_names_full = model['feature_columns']
                             if len(feature_names_full) == 0:
                                 st.error("Model has no feature columns defined.")
                                 st.stop()
-                            # Exclude the isolation forest score column (last column)
                             feature_names = feature_names_full[:-1] if len(feature_names_full) > 1 else feature_names_full
                                                         
 
                             st.subheader("📈 Global Feature Importance (Top 15)")
-                            feature_names = model['feature_columns'][:-1]  # exclude isolation forest score
+                            feature_names = model['feature_columns'][:-1]  #exclude isolation forest score
                             importance = xgb_model.feature_importances_[:len(feature_names)]
                             imp_df = pd.DataFrame({'feature': feature_names, 'importance': importance}).sort_values('importance', ascending=False).head(15)
                             
@@ -262,16 +261,13 @@ def main():
                             st.pyplot(fig2)
                             plt.close(fig2)
                             
-                            # Optional: SHAP summary for the whole dataset (use a sample if too large)
-      # ... after global feature importance plot ...
 
-                            # SHAP summary for the whole dataset (sample up to 100 records)
                             st.subheader("🔎 Global SHAP Explanation (sample of 100 records)")
 
-                            # Use the full feature list (including isolation_forest_anomaly_score)
-                            full_feature_names = model['feature_columns']   # already contains the iso score column
+                           
+                            full_feature_names = model['feature_columns']   #already contains the iso score column
 
-                            # Sample the data to keep SHAP computation fast
+                            #sample the data to keep SHAP computation fast
                             if len(x_append) > 100:
                                 sample_idx = np.random.choice(len(x_append), 100, replace=False)
                                 x_sample = x_append[sample_idx]
@@ -281,24 +277,23 @@ def main():
                             explainer = model['shap_explainer']
                             shap_values_sample = explainer.shap_values(x_sample)
 
-                            # Handle binary classification output (list of two arrays)
+                            #work and handle binary classification result
                             if isinstance(shap_values_sample, list):
                                 if len(shap_values_sample) == 2:
-                                    shap_vals = shap_values_sample[1]   # positive class (malicious)
+                                    shap_vals = shap_values_sample[1]   #positive class (malicious)
                                 else:
-                                    shap_vals = shap_values_sample[0]   # fallback
+                                    shap_vals = shap_values_sample[0]   #fallback
                             else:
                                 shap_vals = shap_values_sample
 
-                            # Now shap_vals has shape (n_samples, n_features)
-                            # Plot with the full feature names
+                            #plot with the full feature names
                             fig3, ax3 = plt.subplots(figsize=(10, 6))
                             shap.summary_plot(shap_vals, x_sample, feature_names=full_feature_names,
                                             show=False, max_display=15)
                             st.pyplot(fig3)
                             plt.close(fig3)
                             
-                            # ========== OVERALL EXPLANATION TEXT ==========
+                            #EXPLAINABILITY
                             st.subheader("📝 Organisational Risk Insight")
                             if mal_count > 0:
                                 st.warning(f"**{mal_count} employees ({mal_count/total:.1%})** exhibit malicious patterns. "
@@ -307,13 +302,13 @@ def main():
                             else:
                                 st.success("✅ No malicious employees detected. The organisation appears clean.")
                             
-                            # ========== DETAILED RESULTS TABLE ==========
+                            #Results table and download
                             with st.expander("📋 Detailed Results Table (all employees)"):
                                 display_cols = ["Prediction", "Confidence", "Risk_Prob", "Anomaly_Score"] + \
                                               [c for c in df.columns if c in model['feature_columns']][:5]
                                 st.dataframe(results_df[display_cols], use_container_width=True)
                                 
-                                # Download button
+                                #provide option to download results as CSV
                                 csv_download = results_df.to_csv(index=False).encode('utf-8')
                                 st.download_button(
                                     label="⬇️ Download results as CSV",
@@ -322,7 +317,7 @@ def main():
                                     mime="text/csv"
                                 )
                             
-                            # ========== PER‑RECORD EXPLANATION (optional) ==========
+                            #per record explainability
                             with st.expander("🔍 Explain a specific employee (SHAP per instance)"):
                                 record_options = [
                                     f"Employee {i} – {row['Prediction']} (Conf: {row['Confidence']:.2%})"
@@ -348,7 +343,7 @@ def main():
                                 for bullet in explanation_list[:8]:
                                     st.write(bullet)
                                 
-                                # SHAP bar for this employee
+                                #SHAP bar for this employee
                                 fig4, ax4 = plt.subplots(figsize=(8, 4))
                                 top_n = feat_contrib.head(10)
                                 colors = ['red' if x > 0 else 'green' for x in top_n['shap_value']]
@@ -367,7 +362,7 @@ def main():
         st.markdown('<h2 class="centered-header">Single Entity Search</h2>', unsafe_allow_html=True)
         st.info("This is the Place to Search for a Single Employee or Entity.")
         
-    elif page == "📊 Exploratory Data Analysis":
+    elif page == "Exploratory Data Analysis":
         st.markdown('<h2 class="centered-header">Exploratory Data Analysis</h2>', unsafe_allow_html=True)
         st.info("🔬 **Coming soon**: Interactive visualizations & anomaly detection")
 
