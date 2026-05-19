@@ -357,14 +357,144 @@ def main():
                         except Exception as e:
                             st.error(f"Error processing file: {str(e)}")
             except Exception as e:
-                st.error(f"Error reading file: {str(e)}")
-    elif page == "Single Record Search":
-        st.markdown('<h2 class="centered-header">Single Entity Search</h2>', unsafe_allow_html=True)
-        st.info("This is the Place to Search for a Single Employee or Entity.")
-        
+                st.error(f"Error reading file: {str(e)}")        
     elif page == "Exploratory Data Analysis":
         st.markdown('<h2 class="centered-header">Exploratory Data Analysis</h2>', unsafe_allow_html=True)
-        st.info("🔬 **Coming soon**: Interactive visualizations & anomaly detection")
+        st.info("Interactive visualizations & quick anomaly insights")
+
+        #let user choose dataset source
+        data_source = st.radio("Choose dataset:", ("Upload CSV", "Use sample dataset"))
+
+        df = None
+        if data_source == "Upload CSV":
+            upload = st.file_uploader("Upload a CSV for EDA", type="csv")
+            if upload is not None:
+                try:
+                    df = pd.read_csv(upload)
+                    st.success(f"Loaded **{len(df):,}** records from uploaded file")
+                except Exception as e:
+                    st.error(f"Could not read uploaded CSV: {e}")
+        else:
+            #try to load the bundled sample dataset
+            try:
+                @st.cache_data
+                def _load_sample():
+                    return pd.read_csv("AI_Model_Code/insider_threat_clean_dataset.csv")
+                df = _load_sample()
+                st.success(f"Loaded sample dataset with **{len(df):,}** records")
+            except Exception:
+                st.warning("Sample dataset not available. Please upload a CSV.")
+
+        if df is None:
+            st.info("Upload a file or select the sample dataset to begin EDA.")
+            return
+
+        #show basic dataframe and shape
+        st.subheader("Dataset Snapshot")
+        st.write(f"Shape: {df.shape[0]:,} rows × {df.shape[1]:,} columns")
+        with st.expander("Preview data (first 50 rows)"):
+            st.dataframe(df.head(50), use_container_width=True)
+
+
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+        #quick summary
+        st.subheader("Quick Summary")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(df.describe(include='all').T)
+        with col2:
+            missing = df.isnull().sum().sort_values(ascending=False)
+            missing = missing[missing > 0]
+            if len(missing):
+                st.markdown("**Missing values (top)**")
+                st.bar_chart(missing.head(20))
+            else:
+                st.markdown("**Missing values:** None detected")
+
+        #detect candidate target column 
+        possible_targets = [c for c in df.columns if c.lower() in ("is_malicious","malicious","label","target","is_threat","threat")]
+        target_col = possible_targets[0] if possible_targets else None
+        if target_col:
+            st.markdown(f"**Detected target column:** `{target_col}`")
+            st.write(df[target_col].value_counts(dropna=False))
+
+        #istributions for numeric features
+        if numeric_cols:
+            st.subheader("Numeric Feature Exploration")
+            num_sel = st.selectbox("Choose numeric column to inspect", [None] + numeric_cols)
+            if num_sel:
+                fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+                sns.histplot(df[num_sel].dropna(), kde=True, ax=ax[0], color='cornflowerblue')
+                ax[0].set_title(f"Distribution of {num_sel}")
+                sns.boxplot(x=df[num_sel], ax=ax[1], color='lightgreen')
+                ax[1].set_title(f"Boxplot of {num_sel}")
+                st.pyplot(fig)
+                plt.close(fig)
+
+            #scatter between two numeric features
+            if len(numeric_cols) >= 2:
+                st.subheader("Scatter / Relationship Explorer")
+                x_col = st.selectbox("X axis", numeric_cols, index=0)
+                y_col = st.selectbox("Y axis", numeric_cols, index=1)
+                hue = st.selectbox("Color by (optional)", [None] + ([target_col] if target_col else []) + cat_cols)
+                fig2, ax2 = plt.subplots(figsize=(7, 5))
+                if hue and hue in df.columns:
+                    sns.scatterplot(data=df, x=x_col, y=y_col, hue=hue, ax=ax2, palette='tab10', alpha=0.7)
+                else:
+                    sns.scatterplot(data=df, x=x_col, y=y_col, ax=ax2, color='purple', alpha=0.6)
+                ax2.set_title(f"{y_col} vs {x_col}")
+                st.pyplot(fig2)
+                plt.close(fig2)
+
+            #correlation heatmap
+            if len(numeric_cols) >= 2:
+                st.subheader("Correlation Matrix (numeric)")
+                corr = df[numeric_cols].corr()
+                fig3, ax3 = plt.subplots(figsize=(10, max(4, len(numeric_cols)*0.25)))
+                sns.heatmap(corr, cmap='coolwarm', center=0, ax=ax3)
+                st.pyplot(fig3)
+                plt.close(fig3)
+
+                if target_col and target_col in corr.columns:
+                    st.markdown("**Top features correlated with target**")
+                    corr_with_target = corr[target_col].drop(labels=[target_col]).abs().sort_values(ascending=False)
+                    st.write(corr_with_target.head(10))
+
+        #categorical exploration
+        if cat_cols:
+            st.subheader("Categorical Feature Counts")
+            cat_sel = st.selectbox("Choose categorical column (counts)", [None] + cat_cols)
+            if cat_sel:
+                counts = df[cat_sel].value_counts(dropna=False).head(30)
+                fig4, ax4 = plt.subplots(figsize=(8, min(6, 0.35*len(counts))))
+                sns.barplot(x=counts.values, y=counts.index, ax=ax4, palette='mako')
+                ax4.set_xlabel("Count")
+                ax4.set_title(f"Value counts for {cat_sel}")
+                st.pyplot(fig4)
+                plt.close(fig4)
+
+        # quick anomaly hint using IsolationForest if numeric cols available
+        if numeric_cols:
+            st.subheader("Quick Anomaly Scan (IsolationForest)")
+            if st.button("Run quick anomaly scan"):
+                try:
+                    iso = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
+                    sample_df = df[numeric_cols].fillna(0).sample(n=min(2000, len(df)), random_state=42)
+                    iso.fit(sample_df)
+                    scores = iso.decision_function(sample_df)
+                    outliers = (scores < np.quantile(scores, 0.01)).sum()
+                    st.write(f"Approx. {outliers} outliers detected in sampled data (top 1%).")
+                    fig5, ax5 = plt.subplots(figsize=(8, 3))
+                    ax5.hist(scores, bins=50, color='salmon')
+                    ax5.set_title("IsolationForest anomaly score distribution (sample)")
+                    st.pyplot(fig5)
+                    plt.close(fig5)
+                except Exception as e:
+                    st.error(f"Anomaly scan failed: {e}")
+
+        st.success("Exploratory Data Analysis complete. Use the controls above to refine views.")
 
 if __name__ == "__main__":
     main()
