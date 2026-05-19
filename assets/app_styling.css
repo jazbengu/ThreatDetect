@@ -1,0 +1,298 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap');
+
+/* =========================
+   DAY6 SUNRISE PALETTE
+========================= */
+
+:root {
+    --primary: #7EA6C4;      /* Cloudy sky blue */
+    --secondary: #AFC2A3;    /* Soft sage */
+    --accent: #F4E7D3;       /* Warm sunlight cream */
+
+    --background: #DCE8F0;   /* Morning sky */
+    --surface: #EEF3F6;      /* Fog white */
+    --card: rgba(255,255,255,0.55);
+
+    --light: #2D3748;        /* Deep muted navy */
+    --muted: #6B7280;
+
+    --shadow: rgba(84, 104, 124, 0.15);
+}
+
+/* =========================
+   GLOBAL
+========================= */
+
+html,
+body,
+[data-testid="stAppViewContainer"],
+.main {
+    background: transparent !important;
+    font-family: 'Nunito', sans-serif;
+    color: var(--light);
+}
+
+/* =========================
+   MAIN BACKGROUND
+========================= */
+
+[data-testid="stAppViewContainer"] {
+    background:
+        linear-gradient(
+            180deg,
+            #6F98BA 0%,
+            #A8C0CF 30%,
+            #D7E2DC 65%,
+            #F4E7D3 100%
+        ) !important;
+
+    min-height: 100vh;
+    position: relative;
+    overflow: hidden;
+}
+
+/* dreamy cloudy overlay */
+
+[data-testid="stAppViewContainer"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+
+    background:
+        radial-gradient(circle at 20% 20%,
+            rgba(255,255,255,0.45),
+            transparent 25%),
+
+        radial-gradient(circle at 80% 30%,
+            rgba(255,255,255,0.35),
+            transparent 30%),
+
+        radial-gradient(circle at 50% 80%,
+            rgba(255,255,255,0.25),
+            transparent 35%);
+
+    animation: cloudFloat 30s ease-in-out infinite alternate;
+
+    pointer-events: none;
+}
+
+/* floating atmosphere */
+
+@keyframes cloudFloat {
+    from {
+        transform: translateY(0px) scale(1);
+    }
+
+    to {
+        transform: translateY(-20px) scale(1.03);
+    }
+}
+
+/* =========================
+   STREAMLIT HEADER
+========================= */
+
+[data-testid="stHeader"] {
+    background: transparent !important;
+}
+
+/* =========================
+   SIDEBAR
+========================= */
+
+section[data-testid="stSidebar"] {
+    background: rgba(255,255,255,0.18) !important;
+
+    backdrop-filter: blur(18px);
+
+    border-right:
+        1px solid rgba(255,255,255,0.2);
+}
+
+/* =========================
+   MAIN CONTAINER
+========================= */
+
+.appview-container .main .block-container {
+    background: rgba(255,255,255,0.22);
+
+    backdrop-filter: blur(30px);
+    
+    border-radius: 32px;
+
+    border: 1px solid rgba(255,255,255,0.28);
+
+    box-shadow:
+        0 8px 40px rgba(84,104,124,0.12);
+
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+
+    margin-top: 2rem;
+}
+
+.main::before {
+    content: "";
+
+    position: fixed;
+
+    width: 600px;
+    height: 600px;
+
+    top: -200px;
+    right: -150px;
+
+    background:
+        radial-gradient(
+            circle,
+            rgba(255,255,255,0.25),
+            transparent 70%
+        );
+
+    filter: blur(40px);
+
+    pointer-events: none;
+}
+
+/* =========================
+   TYPOGRAPHY
+========================= */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: 'Nunito', sans-serif;
+    color: var(--light);
+}
+
+/* MAIN HERO TITLE */
+
+.hero-title {
+    font-family: 'Cormorant Garamond', serif;
+
+    font-size: 5rem;
+
+    font-weight: 800;
+
+    letter-spacing: -3px;
+
+    color: rgba(255,255,255,0.92);
+
+    text-shadow:
+        0 8px 30px rgba(0,0,0,0.12);
+
+    line-height: 1;
+}
+
+.block-container {
+    padding-top: 4rem !important;
+    padding-bottom: 4rem !important;
+}
+
+.hero-subtitle {
+    font-size: 1.3rem;
+
+    color: rgba(45,55,72,0.8);
+
+    font-weight: 400;
+
+    max-width: 700px;
+
+    margin: 0 auto;
+
+    line-height: 1.8;
+}
+
+/* gentle floating */
+
+@keyframes titleFloat {
+    from {
+        transform: translateY(0px);
+    }
+
+    to {
+        transform: translateY(-4px);
+    }
+}
+
+/* =========================
+   BUTTONS
+========================= */
+
+.stButton > button {
+    background:
+        linear-gradient(
+            135deg,
+            #7EA6C4,
+            #AFC2A3
+        ) !important;
+
+    color: white !important;
+
+    border: none !important;
+
+    border-radius: 16px !important;
+
+    font-weight: 700 !important;
+
+    padding: 0.6rem 1.2rem !important;
+
+    box-shadow:
+        0 6px 20px rgba(84,104,124,0.18);
+
+    transition: all 0.3s ease !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 10px 25px rgba(84,104,124,0.25);
+}
+
+/* =========================
+   INPUTS
+========================= */
+
+.stTextInput input,
+.stSelectbox div[data-baseweb="select"] {
+    background: rgba(255,255,255,0.5) !important;
+
+    border-radius: 14px !important;
+
+    border:
+        1px solid rgba(255,255,255,0.35) !important;
+
+    color: var(--light) !important;
+}
+
+/* =========================
+   METRICS / CARDS
+========================= */
+
+.stMetric {
+    background:
+        rgba(255,255,255,0.3) !important;
+
+    border-radius: 20px !important;
+
+    padding: 1rem !important;
+
+    border:
+        1px solid rgba(255,255,255,0.25) !important;
+
+    backdrop-filter: blur(14px);
+}
+
+@keyframes drift {
+    from {
+        transform: translateX(0px);
+    }
+
+    to {
+        transform: translateX(40px);
+    }
+}

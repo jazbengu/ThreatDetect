@@ -1,0 +1,14 @@
+{
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "./unit testing",
+        "-p",
+        "*test.py"
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.unittestEnabled": true,
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.autoImportCompletions": true
+}

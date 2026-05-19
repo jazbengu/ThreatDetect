@@ -1,197 +1,159 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
 
-colors = {  # inspired by Midnight Sun: Girls' Trip
-    'primary': '#FF69B4',      # Hot pink (main brand color)
-    'secondary': '#8A2BE2',    # Blue violet
-    'accent': '#00CED1',       # Dark turquoise  
-    'background': '#0F0F23',   # Deep midnight blue
-    'surface': '#1A1B2E',      # Dark purple-gray
-    'card': '#16213E',         # Navy blue
-    'success': '#FF1493',      # Deep pink
-    'warning': '#FF4500',      # Orange red
-    'light': '#E6E6FA',        # Lavender blush
-    'gradient_start': '#667eea',
-    'gradient_end': '#764ba2'
-}
 
-# ✅ FIXED CSS - No complex RGB conversion
-st.markdown(f"""
-<style>
-    /* 🌌 COSMIC NEBULA BACKGROUND - SIMPLIFIED & WORKING */
-    .main {{
-        background: 
-            radial-gradient(ellipse at bottom, 
-                {colors['background']} 0%, 
-                {colors['surface']} 30%, 
-                #2a1b3d 60%, 
-                transparent 80%),
-            linear-gradient(135deg, 
-                {colors['primary']} 0%, 
-                {colors['secondary']} 25%, 
-                {colors['accent']} 50%, 
-                {colors['primary']} 75%, 
-                {colors['secondary']} 100%);
-        background-size: 200% 200%, 100% 100%;
-        animation: nebulaFlow 20s ease-in-out infinite;
-        position: relative;
-        min-height: 100vh;
-        overflow: hidden;
-    }}
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                             confusion_matrix, classification_report, precision_recall_curve, PrecisionRecallDisplay)
+from sklearn.ensemble import IsolationForest
+import shap
+
+import xgboost as xgb
+import pickle
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import warnings
+warnings.filterwarnings("ignore")
+
+@st.cache_resource #this is to make sure that the doesnt reload every time the page is refreshed
+def get_styling(style_path):
+    with open(style_path) as style_file:
+        st.markdown(f"<style>{style_file.read()}</style>", unsafe_allow_html=True)
+
+get_styling("assets/app_styling.css")
+
+
+@st.cache_data
+def load_model():
+    with open("AI_Model_Code/insider_threat_model.pkl", "rb") as file:
+        model_package = pickle.load(file)
+    if 'shap_explainer' not in model_package:
+        model_package['shap_explainer'] = shap.TreeExplainer(model_package['xgb_model'])
+    return model_package
+
+
+def validate_input_columns(df, required_columns):
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Missing required columns: {', '.join(missing)}. "
+            "Please provide a CSV with the expected employee / threat feature columns."
+        )
+
+
+def prepare_features(df, model_package):
+    cat_cols = model_package['cat_cols']
+    bin_cols = model_package['bin_cols']
+    num_cols = model_package['num_cols']
+
+    engineered_cols = ['print_ratio', 'file_ratio', 'risk_ratio', 'access_ratio', 'afterhrs_ratio']
+    required_raw = [
+        col for col in model_package['feature_columns']
+        if col not in engineered_cols + ['isolation_forest_anomaly_score']
+    ]
+
+    validate_input_columns(df, required_raw)
+
+    df = df.copy()
+    df[cat_cols] = df[cat_cols].astype(str).apply(lambda s: s.str.strip())
+    raw_num_cols = [col for col in num_cols if col in df.columns]
+    df[raw_num_cols] = df[raw_num_cols].apply(pd.to_numeric, errors='coerce')
+    df[raw_num_cols] = df[raw_num_cols].fillna(df[raw_num_cols].median())
+
+    df['print_ratio'] = df['total_printed_pages'] / df['num_printed_pages_off_hours']
+    df['file_ratio'] = df['total_files_burned'] / df['num_printed_pages_off_hours']
+    df['risk_ratio'] = (
+        df['has_criminal_record'] + df['is_contractor'] + df['has_foreign_citizenship']
+    )
+    df['access_ratio'] = df['num_printed_pages_off_hours'] * df['entry_during_weekend']
+    df['afterhrs_ratio'] = df['late_exit_flag'] * df['num_printed_pages_off_hours']
+
+    df[engineered_cols] = df[engineered_cols].replace([np.inf, -np.inf], np.nan)
+    df[engineered_cols] = df[engineered_cols].fillna(df[engineered_cols].median())
+
+    for col in cat_cols:
+        le = model_package['label_encoders'][col]
+        values = df[col].astype(str).str.strip()
+        unseen = ~values.isin(le.classes_)
+        if unseen.any():
+            raise ValueError(
+                f"Column '{col}' contains unseen categories: "
+                f"{sorted(values[unseen].unique())}."
+            )
+        df[col] = le.transform(values)
+
+    df[num_cols] = model_package['scaler'].transform(df[num_cols])
+
+    feature_cols = model_package['feature_columns'][:-1]
+    x_for_iso = df[feature_cols].to_numpy()
+    iso_scores = model_package['iso_forest'].decision_function(x_for_iso).reshape(-1, 1)
+    x_append = np.hstack((x_for_iso, iso_scores))
+
+    return df, x_append, iso_scores
+
+def results_explainability(model_package, x_append_row, iso_score, original_row, feature_names, threshold):
+    xgb_model = model_package['xgb_model']
+    explainer = model_package['shap_explainer']
     
-    @keyframes nebulaFlow {{
-        0%, 100% {{ background-position: 0% 0%, 0% 0%; }}
-        50% {{ background-position: 100% 100%, 0% 0%; }}
-    }}
+    # SHAP values for this single instance
+    shap_vals_list = explainer.shap_values(x_append_row.reshape(1, -1))
+    # For binary classification, shap_vals_list is [class0, class1]; we want class1 (malicious)
+    if isinstance(shap_vals_list, list) and len(shap_vals_list) == 2:
+        shap_values = shap_vals_list[1][0]       # first (only) row of positive class
+    else:
+        shap_values = shap_vals_list[0]          # fallback
     
-    /* ✨ SIMPLIFIED SPARKLES - Uses HEX directly */
-    .main::after {{
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-image: 
-            radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.8), transparent),
-            radial-gradient(1px 1px at 80% 70%, {colors['primary']}, transparent),
-            radial-gradient(0.5px 0.5px at 40% 90%, {colors['accent']}, transparent);
-        background-repeat: repeat;
-        background-size: 150px 120px;
-        animation: sparkleFloat 30s linear infinite;
-        pointer-events: none;
-        opacity: 0.6;
-    }}
+    # Probability and prediction
+    prob = xgb_model.predict_proba(x_append_row.reshape(1, -1))[0, 1]
+    pred = "Malicious" if prob >= threshold else "Normal"
+    confidence = prob if pred == "Malicious" else 1 - prob
     
-    @keyframes sparkleFloat {{
-        from {{ transform: translateY(0px); }}
-        to {{ transform: translateY(-120px); }}
-    }}
+    # Feature contributions
+    feature_contrib = pd.DataFrame({
+        'feature': feature_names,
+        'shap_value': shap_values
+    }).sort_values('shap_value', ascending=False)
     
-    /* App container */
-    .appview-container .main .block-container {{
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        background: rgba(26, 27, 46, 0.97);
-        border-radius: 25px;
-        backdrop-filter: blur(20px);
-        box-shadow: 0 25px 50px rgba(0,0,0,0.4);
-        border: 1px solid rgba(255, 105, 180, 0.25);
-        position: relative;
-        z-index: 10;
-    }}
+    # Top features pushing toward malicious (positive SHAP)
+    top_malicious = feature_contrib[feature_contrib['shap_value'] > 0].head(5)
+    # Top features pushing toward normal (negative SHAP)
+    top_normal = feature_contrib[feature_contrib['shap_value'] < 0].head(5).sort_values('shap_value')
     
-    /* Headers */
-    h1 {{
-        background: linear-gradient(45deg, {colors['primary']}, {colors['secondary']}, {colors['accent']}) !important;
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        background-clip: text !important;
-        font-family: 'Inter', sans-serif !important;
-        font-weight: 900 !important;
-        font-size: 3.5rem !important;
-        margin-bottom: 1rem !important;
-        text-shadow: 0 0 30px rgba(255, 105, 180, 0.7) !important;
-    }}
+    # Get original values for those features (human-readable)
+    readable_explanation = []
+    for _, row in top_malicious.iterrows():
+        feat = row['feature']
+        val = original_row.get(feat, 'N/A')
+        if isinstance(val, (np.generic, np.ndarray)):
+            val = val.item()
+        if isinstance(val, float) and val.is_integer():
+            val = int(val)
+        readable_explanation.append(f"• **{feat}** = {val}  →  increases risk")
     
-    h2 {{
-        color: {colors['secondary']} !important;
-        font-family: 'Inter', sans-serif !important;
-        font-weight: 700 !important;
-        font-size: 2.2rem !important;
-        text-shadow: 0 0 15px rgba(138, 43, 226, 0.5) !important;
-    }}
+    for _, row in top_normal.iterrows():
+        feat = row['feature']
+        val = original_row.get(feat, 'N/A')
+        if isinstance(val, (np.generic, np.ndarray)):
+            val = val.item()
+        if isinstance(val, float) and val.is_integer():
+            val = int(val)
+        readable_explanation.append(f"• **{feat}** = {val}  →  reduces risk")
     
-    /* Sidebar */
-    section[data-testid="stSidebar"] > div > div {{
-        background: linear-gradient(180deg, {colors['card']}, {colors['surface']}) !important;
-        border-right: 1px solid rgba(255, 105, 180, 0.4) !important;
-        backdrop-filter: blur(15px) !important;
-    }}
-    
-    /* Sidebar selectbox */
-    .stSelectbox > div > div {{
-        background-color: {colors['card']} !important;
-        border: 1px solid {colors['accent']} !important;
-        border-radius: 12px !important;
-        color: {colors['light']} !important;
-    }}
-    
-    /* Buttons */
-    .stButton > button {{
-        background: linear-gradient(45deg, {colors['primary']}, {colors['secondary']}, {colors['accent']}) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 15px !important;
-        font-weight: 600 !important;
-        box-shadow: 0 10px 30px rgba(255, 105, 180, 0.5) !important;
-        transition: all 0.4s ease !important;
-    }}
-    
-    .stButton > button:hover {{
-        transform: translateY(-3px) scale(1.05) !important;
-        box-shadow: 0 15px 40px rgba(255, 105, 180, 0.7) !important;
-    }}
-    
-    /* File uploader */
-    .stFileUploader > div {{
-        background-color: {colors['card']} !important;
-        border: 2px dashed {colors['accent']} !important;
-        border-radius: 20px !important;
-    }}
-    
-    /* Text */
-    .stMarkdown {{
-        color: {colors['light']} !important;
-    }}
-    
-    /* Metrics */
-    .stMetric {{
-        background: linear-gradient(135deg, rgba(255, 105, 180, 0.15), rgba(138, 43, 226, 0.1)) !important;
-        border-radius: 15px !important;
-        border: 1px solid rgba(255, 105, 180, 0.3) !important;
-    }}
-</style>
-""", unsafe_allow_html=True)
+    return pred, prob, confidence, readable_explanation, feature_contrib
+
 
 def main():
-    # ✅ FIXED TITLE - No complex f-string issues
+
     st.markdown(f"""
-    <div style='text-align: center; margin-bottom: 3rem; padding: 2rem;'>
-        <h1 style='
-            font-size: 4.5rem; 
-            background: linear-gradient(45deg, {colors["primary"]}, {colors["secondary"]}, {colors["accent"]});
-            -webkit-background-clip: text; 
-            -webkit-text-fill-color: transparent;
-            background-clip: text; 
-            font-weight: 900;
-            letter-spacing: -2px;
-            margin-bottom: 1rem;
-            text-shadow: 0 0 40px rgba(255, 105, 180, 0.8);
-            animation: titleGlow 2s ease-in-out infinite alternate;
-        '>
-            🔍 ThreatFind
-        </h1>
-        <p style='
-            color: {colors["light"]}; 
-            font-size: 1.6rem; 
-            font-weight: 300; 
-            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
-            max-width: 700px;
-            margin: 0 auto;
-            font-family: Inter, sans-serif;
-        '>
+    <div class="hero-container">
+        <h1 class="hero-title">🔍 ThreatFind</h1>
+        <p class="hero-subtitle">
             Snuff out any potential insider threats before they can cause harm 🚨
         </p>
     </div>
-    
-    <style>
-    @keyframes titleGlow {{
-        0% {{ filter: drop-shadow(0 0 10px {colors["primary"]}); }}
-        100% {{ filter: drop-shadow(0 0 30px {colors["secondary"]}); }}
-    }}
-    </style>
     """, unsafe_allow_html=True)
     
     # Sidebar
@@ -205,7 +167,7 @@ def main():
     st.divider()
 
     if page == "🔍 Organisational Search via CSV":
-        st.markdown(f"<h2 style='color: {colors['secondary']}; text-align: center;'>🏢 Organisational Analysis</h2>", unsafe_allow_html=True)
+        st.markdown('<h2 class="centered-header">🏢 Organisational Analysis</h2>', unsafe_allow_html=True)
         
         col1, col2 = st.columns([2, 1])
         with col1:
@@ -218,30 +180,195 @@ def main():
         if file_upload is not None:
             try:
                 df = pd.read_csv(file_upload)
-                st.success(f"✅ Loaded **{len(df):,}** records successfully!")
+                st.success(f"Loaded **{len(df):,}** records successfully!")
                 st.dataframe(df.head(10), use_container_width=True)
                 
-                col1, col2, col3 = st.columns(3)
+                col1, col2 = st.columns(2)
                 with col1:
                     st.metric("📊 Total Records", len(df))
                 with col2:
                     if 'employee_campus' in df.columns:
-                        st.metric("🏫 Unique Campuses", df["employee_campus"].nunique())
-                with col3:
-                    if st.button("🚀 Run Threat Analysis", type="primary"):
-                        st.balloons()
-                        st.success("🔍 Analysis complete! No immediate threats detected.")
-                        
-            except Exception as e:
-                st.error(f"❌ Error processing file: {str(e)}")
-                st.info("💡 Try a different CSV format or check your file structure")
+                        st.metric("Unique Campuses", df["employee_campus"].nunique())
+                
+                if st.button("🚀 Run Threat Detection", type="primary"):
+                    with st.spinner("Analyzing all records..."):
+                        model = load_model()
+                        try:
+                            # Prepare features and get predictions
+                            processed_df, x_append, iso_scores = prepare_features(df, model)
+                            xgb_model = model['xgb_model']
+                            threshold = model['best_threshold']
+                            probs = xgb_model.predict_proba(x_append)[:, 1]
+                            preds = (probs >= threshold).astype(int)
+                            
+                            # Build results dataframe
+                            results_df = df.copy()
+                            results_df["Prediction"] = ["Malicious" if p == 1 else "Normal" for p in preds]
+                            results_df["Risk_Prob"] = probs
+                            results_df["Anomaly_Score"] = iso_scores
+                            results_df["Confidence"] = np.where(preds == 1, probs, 1 - probs).astype(float)
+                            
+                            # ========== OVERALL STATISTICS ==========
+                            st.subheader("📊 Organisational Threat Summary")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            total = len(results_df)
+                            mal_count = (results_df["Prediction"] == "Malicious").sum()
+                            norm_count = total - mal_count
+                            col1.metric("Total Employees", total)
+                            col2.metric("⚠️ Malicious", mal_count, delta=f"{mal_count/total:.1%}" if total>0 else "0")
+                            col3.metric("✅ Normal", norm_count, delta=f"{norm_count/total:.1%}" if total>0 else "0")
+                            col4.metric("Avg. Confidence", f"{results_df['Confidence'].mean():.2%}")
+                            
+                            # ========== GRAPHS ==========
+                            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+                            
+                            # Bar chart of predictions
+                            pred_counts = results_df["Prediction"].value_counts()
+                            axes[0].bar(pred_counts.index, pred_counts.values, color=['#d9534f', '#5bc0de'])
+                            axes[0].set_title("Threat Prediction Count")
+                            axes[0].set_ylabel("Number of employees")
+                            
+                            # Histogram of risk probabilities
+                            axes[1].hist(results_df["Risk_Prob"], bins=30, color='darkorange', edgecolor='black')
+                            axes[1].axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.2f}')
+                            axes[1].set_title("Risk Probability Distribution")
+                            axes[1].set_xlabel("Probability of being malicious")
+                            axes[1].set_ylabel("Frequency")
+                            axes[1].legend()
+                            
+                            plt.tight_layout()
+                            st.pyplot(fig)
+                            plt.close(fig)# After loading model and before using feature_names
+                            
+                            feature_names_full = model['feature_columns']
+                            if len(feature_names_full) == 0:
+                                st.error("Model has no feature columns defined.")
+                                st.stop()
+                            # Exclude the isolation forest score column (last column)
+                            feature_names = feature_names_full[:-1] if len(feature_names_full) > 1 else feature_names_full
+                                                        
 
-    elif page == "🎯 Single Search":
-        st.markdown(f"<h2 style='color: {colors['accent']}; text-align: center;'>🔎 Single Entity Search</h2>", unsafe_allow_html=True)
-        st.info("🎯 **Coming soon**: Search individual users, IPs, or threat indicators")
+                            st.subheader("📈 Global Feature Importance (Top 15)")
+                            feature_names = model['feature_columns'][:-1]  # exclude isolation forest score
+                            importance = xgb_model.feature_importances_[:len(feature_names)]
+                            imp_df = pd.DataFrame({'feature': feature_names, 'importance': importance}).sort_values('importance', ascending=False).head(15)
+                            
+                            fig2, ax2 = plt.subplots(figsize=(10, 6))
+                            ax2.barh(imp_df['feature'], imp_df['importance'], color='teal')
+                            ax2.set_xlabel("Importance (F-score)")
+                            ax2.set_title("Which features drive malicious predictions across the organisation?")
+                            ax2.invert_yaxis()
+                            st.pyplot(fig2)
+                            plt.close(fig2)
+                            
+                            # Optional: SHAP summary for the whole dataset (use a sample if too large)
+      # ... after global feature importance plot ...
+
+                            # SHAP summary for the whole dataset (sample up to 100 records)
+                            st.subheader("🔎 Global SHAP Explanation (sample of 100 records)")
+
+                            # Use the full feature list (including isolation_forest_anomaly_score)
+                            full_feature_names = model['feature_columns']   # already contains the iso score column
+
+                            # Sample the data to keep SHAP computation fast
+                            if len(x_append) > 100:
+                                sample_idx = np.random.choice(len(x_append), 100, replace=False)
+                                x_sample = x_append[sample_idx]
+                            else:
+                                x_sample = x_append
+
+                            explainer = model['shap_explainer']
+                            shap_values_sample = explainer.shap_values(x_sample)
+
+                            # Handle binary classification output (list of two arrays)
+                            if isinstance(shap_values_sample, list):
+                                if len(shap_values_sample) == 2:
+                                    shap_vals = shap_values_sample[1]   # positive class (malicious)
+                                else:
+                                    shap_vals = shap_values_sample[0]   # fallback
+                            else:
+                                shap_vals = shap_values_sample
+
+                            # Now shap_vals has shape (n_samples, n_features)
+                            # Plot with the full feature names
+                            fig3, ax3 = plt.subplots(figsize=(10, 6))
+                            shap.summary_plot(shap_vals, x_sample, feature_names=full_feature_names,
+                                            show=False, max_display=15)
+                            st.pyplot(fig3)
+                            plt.close(fig3)
+                            
+                            # ========== OVERALL EXPLANATION TEXT ==========
+                            st.subheader("📝 Organisational Risk Insight")
+                            if mal_count > 0:
+                                st.warning(f"**{mal_count} employees ({mal_count/total:.1%})** exhibit malicious patterns. "
+                                          f"The highest‑risk features across the organisation are: "
+                                          f"{', '.join(imp_df.head(3)['feature'].values)}.")
+                            else:
+                                st.success("✅ No malicious employees detected. The organisation appears clean.")
+                            
+                            # ========== DETAILED RESULTS TABLE ==========
+                            with st.expander("📋 Detailed Results Table (all employees)"):
+                                display_cols = ["Prediction", "Confidence", "Risk_Prob", "Anomaly_Score"] + \
+                                              [c for c in df.columns if c in model['feature_columns']][:5]
+                                st.dataframe(results_df[display_cols], use_container_width=True)
+                                
+                                # Download button
+                                csv_download = results_df.to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    label="⬇️ Download results as CSV",
+                                    data=csv_download,
+                                    file_name="threat_analysis_results.csv",
+                                    mime="text/csv"
+                                )
+                            
+                            # ========== PER‑RECORD EXPLANATION (optional) ==========
+                            with st.expander("🔍 Explain a specific employee (SHAP per instance)"):
+                                record_options = [
+                                    f"Employee {i} – {row['Prediction']} (Conf: {row['Confidence']:.2%})"
+                                    for i, row in results_df.iterrows()
+                                ]
+                                selected_idx = st.selectbox("Select a record to explain", range(len(record_options)), 
+                                                           format_func=lambda i: record_options[i])
+                                
+                                original_row = df.iloc[selected_idx].to_dict()
+                                x_row = x_append[selected_idx]
+                                iso = iso_scores[selected_idx]
+                                
+                                pred_text, prob_score, conf, explanation_list, feat_contrib = results_explainability(
+                                    model, x_row, iso, original_row, feature_names, threshold
+                                )
+                                
+                                col1, col2, col3 = st.columns(3)
+                                col1.metric("Prediction", pred_text)
+                                col2.metric("Confidence", f"{conf:.2%}")
+                                col3.metric("Anomaly Score", f"{iso:.3f}")
+                                
+                                st.markdown("**Why? (Human‑readable risk indicators)**")
+                                for bullet in explanation_list[:8]:
+                                    st.write(bullet)
+                                
+                                # SHAP bar for this employee
+                                fig4, ax4 = plt.subplots(figsize=(8, 4))
+                                top_n = feat_contrib.head(10)
+                                colors = ['red' if x > 0 else 'green' for x in top_n['shap_value']]
+                                ax4.barh(top_n['feature'], top_n['shap_value'], color=colors)
+                                ax4.axvline(0, color='black', linestyle='-', linewidth=0.5)
+                                ax4.set_xlabel("SHAP value (pushes toward Malicious →)")
+                                ax4.set_title("Top 10 features influencing this employee")
+                                st.pyplot(fig4)
+                                plt.close(fig4)
+                            
+                        except Exception as e:
+                            st.error(f"Error processing file: {str(e)}")
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
+    elif page == "Single Record Search":
+        st.markdown('<h2 class="centered-header">Single Entity Search</h2>', unsafe_allow_html=True)
+        st.info("This is the Place to Search for a Single Employee or Entity.")
         
     elif page == "📊 Exploratory Data Analysis":
-        st.markdown(f"<h2 style='color: {colors['success']}; text-align: center;'>📈 Threat Intelligence Dashboard</h2>", unsafe_allow_html=True)
+        st.markdown('<h2 class="centered-header">Exploratory Data Analysis</h2>', unsafe_allow_html=True)
         st.info("🔬 **Coming soon**: Interactive visualizations & anomaly detection")
 
 if __name__ == "__main__":
