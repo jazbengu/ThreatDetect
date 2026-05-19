@@ -149,7 +149,7 @@ def main():
 
     st.markdown(f"""
     <div class="hero-container">
-        <h1 class="hero-title">ThreatFind</h1>
+        <h1 class="hero-title">ThreatDetect</h1>
         <p class="hero-subtitle">
             Snuff out any potential insider threats before they can cause harm 
         </p>
@@ -161,7 +161,6 @@ def main():
     page = st.sidebar.selectbox(
         "Choose a page:",
         ["Organisational Search via CSV", 
-         "Single Search", 
          "Exploratory Data Analysis"]
     )
     st.divider()
@@ -245,13 +244,13 @@ def main():
                             if len(feature_names_full) == 0:
                                 st.error("Model has no feature columns defined.")
                                 st.stop()
-                            feature_names = feature_names_full[:-1] if len(feature_names_full) > 1 else feature_names_full
+                            feature_names = feature_names_full
                                                         
 
                             st.subheader("📈 Global Feature Importance (Top 15)")
-                            feature_names = model['feature_columns'][:-1]  #exclude isolation forest score
-                            importance = xgb_model.feature_importances_[:len(feature_names)]
-                            imp_df = pd.DataFrame({'feature': feature_names, 'importance': importance}).sort_values('importance', ascending=False).head(15)
+                            importance_feature_names = model['feature_columns'][:-1]  #exclude isolation forest score
+                            importance = xgb_model.feature_importances_[:len(importance_feature_names)]
+                            imp_df = pd.DataFrame({'feature': importance_feature_names, 'importance': importance}).sort_values('importance', ascending=False).head(15)
                             
                             fig2, ax2 = plt.subplots(figsize=(10, 6))
                             ax2.barh(imp_df['feature'], imp_df['importance'], color='teal')
@@ -262,10 +261,10 @@ def main():
                             plt.close(fig2)
                             
 
-                            st.subheader("🔎 Global SHAP Explanation (sample of 100 records)")
+                            st.subheader("Global SHAP Explanation (sample of 100 records)")
 
                            
-                            full_feature_names = model['feature_columns']   #already contains the iso score column
+                            full_feature_names = model['feature_columns']   #already has the isolation forest score column
 
                             #sample the data to keep SHAP computation fast
                             if len(x_append) > 100:
@@ -294,16 +293,64 @@ def main():
                             plt.close(fig3)
                             
                             #EXPLAINABILITY
-                            st.subheader("📝 Organisational Risk Insight")
+                            st.subheader("Organisational Risk Insight")
+                            high_risk_threshold = min(0.95, threshold + 0.15)
+                            moderate_mask = (probs >= threshold) & (probs < high_risk_threshold)
+                            high_risk_count = int((probs >= high_risk_threshold).sum())
+                            moderate_risk_count = int(moderate_mask.sum())
+                            low_risk_count = int((probs < threshold).sum())
+                            avg_anomaly_score = results_df["Anomaly_Score"].mean()
+                            most_anomalous = results_df.nsmallest(3, "Anomaly_Score")["Anomaly_Score"].tolist()
+                            avg_malicious_confidence = results_df.loc[results_df["Prediction"] == "Malicious", "Confidence"].mean() if mal_count > 0 else 0.0
+                            top_features = ', '.join(imp_df.head(3)['feature'].values)
+
+                            col1, col2, col3, col4 = st.columns(4)
+                            col1.metric("Malicious", f"{mal_count}", delta=f"{mal_count/total:.1%}" if total > 0 else "0")
+                            col2.metric("High risk", f"{high_risk_count}", delta=f"{high_risk_count/total:.1%}" if total > 0 else "0")
+                            col3.metric("Moderate risk", f"{moderate_risk_count}", delta=f"{moderate_risk_count/total:.1%}" if total > 0 else "0")
+                            col4.metric("Avg. anomaly", f"{avg_anomaly_score:.3f}")
+
+                            st.markdown(
+                                f"**Threshold reference:** {threshold:.2f}  \n"
+                                f"**High-risk boundary:** {high_risk_threshold:.2f}  \n"
+                                f"**Average risk probability:** {results_df['Risk_Prob'].mean():.2%}"
+                            )
+
+                            st.markdown(
+                                "#### Key organisational risk signals\n"
+                                f"- **Top features driving malicious predictions:** {top_features}  \n"
+                                f"- **High-risk employees:** {high_risk_count}  \n"
+                                f"- **Moderate-risk employees:** {moderate_risk_count}  \n"
+                                f"- **Low-risk employees:** {low_risk_count}  \n"
+                                f"- **Average anomaly score:** {avg_anomaly_score:.3f}  \n"
+                                f"- **Most anomalous scores:** {', '.join([f'{score:.3f}' for score in most_anomalous])}"
+                            )
+
+                            st.markdown(
+                                "#### What does this means\n"
+                                "- A **Malicious** result means the model sees a strong pattern of risk in this group's data.\n"
+                                "- A **High risk** employee has a very strong signal and should be reviewed first.\n"
+                                "- A **Moderate risk** employee may be worth investigating, especially if multiple warning signs appear.\n"
+                                "- A **Low risk** employee appears more typical compared with the rest of the dataset.\n"
+                                "- The anomaly score shows how unusual the behavior is compared to others; lower numbers are more unusual.\n"
+                                "#### What to do next\n"
+                                "- Start with the high-risk employees and use the per-record explanation section to see the exact factors affecting the decision.\n"
+                                "- Pay attention to the top features listed above, such as after-hours activity or unusual access patterns.\n"
+                                "- If you are unsure, export the results and share them with your security or compliance team for a deeper review.\n"
+                                "- If the dataset is incomplete, add more employee or activity details and rerun the analysis to improve confidence."
+                            )
+
                             if mal_count > 0:
-                                st.warning(f"**{mal_count} employees ({mal_count/total:.1%})** exhibit malicious patterns. "
-                                          f"The highest‑risk features across the organisation are: "
-                                          f"{', '.join(imp_df.head(3)['feature'].values)}.")
+                                st.warning(
+                                    f"**{mal_count} employees ({mal_count/total:.1%})** exhibit malicious patterns. "
+                                    f"The highest-risk features across the organisation are: {top_features}.\n\n"
+                                    f"Average confidence for flagged employees is {avg_malicious_confidence:.1%}."
+                                )
                             else:
-                                st.success("✅ No malicious employees detected. The organisation appears clean.")
-                            
+                                st.success("No malicious employees detected. The organisation appears clean.")
+
                             #Results table and download
-                            with st.expander("📋 Detailed Results Table (all employees)"):
+                            with st.expander("Detailed Results Table (all employees)"):
                                 display_cols = ["Prediction", "Confidence", "Risk_Prob", "Anomaly_Score"] + \
                                               [c for c in df.columns if c in model['feature_columns']][:5]
                                 st.dataframe(results_df[display_cols], use_container_width=True)
@@ -318,7 +365,7 @@ def main():
                                 )
                             
                             #per record explainability
-                            with st.expander("🔍 Explain a specific employee (SHAP per instance)"):
+                            with st.expander("Explain a specific employee (SHAP per instance)"):
                                 record_options = [
                                     f"Employee {i} – {row['Prediction']} (Conf: {row['Confidence']:.2%})"
                                     for i, row in results_df.iterrows()
@@ -331,7 +378,7 @@ def main():
                                 iso = iso_scores[selected_idx]
                                 
                                 pred_text, prob_score, conf, explanation_list, feat_contrib = results_explainability(
-                                    model, x_row, iso, original_row, feature_names, threshold
+                                    model, x_row, iso, original_row, feature_names_full, threshold
                                 )
                                 
                                 col1, col2, col3 = st.columns(3)
@@ -426,7 +473,7 @@ def main():
             num_sel = st.selectbox("Choose numeric column to inspect", [None] + numeric_cols)
             if num_sel:
                 fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-                sns.histplot(df[num_sel].dropna(), kde=True, ax=ax[0], color='cornflowerblue')
+                sns.histplot(df[num_sel].dropna(), kde=True, ax=ax[0], color='cornflowerblue') # pyright: ignore[reportArgumentType]
                 ax[0].set_title(f"Distribution of {num_sel}")
                 sns.boxplot(x=df[num_sel], ax=ax[1], color='lightgreen')
                 ax[1].set_title(f"Boxplot of {num_sel}")
@@ -475,7 +522,7 @@ def main():
                 st.pyplot(fig4)
                 plt.close(fig4)
 
-        # quick anomaly hint using IsolationForest if numeric cols available
+        #quick anomaly hint using IsolationForest if num cols available
         if numeric_cols:
             st.subheader("Quick Anomaly Scan (IsolationForest)")
             if st.button("Run quick anomaly scan"):

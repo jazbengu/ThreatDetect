@@ -7,3 +7,5 @@ seaborn
 plotly
 xgboost
 shap
+pickle
+os
