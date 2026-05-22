@@ -7,7 +7,6 @@ seaborn
 plotly
 xgboost
 shap
-os
 hyperopt
 joblib
 pytest
